@@ -42,7 +42,10 @@ def splade_encode(
             for batch in batches:
                 tokens = tokenizer(
                     list(batch), return_tensors="pt", padding=True
-                ).to("cuda")
+                )
+                if torch.cuda.is_available():
+                    tokens = tokens.to("cuda")
+
                 text_rep = splade(**{splade_kwargs: tokens})[splade_out].cpu()
                 next_processed = curr_processed + len(batch)
                 sparse_docs[curr_processed: next_processed] = text_rep
