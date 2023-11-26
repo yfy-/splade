@@ -88,14 +88,14 @@ def recreate_text(
 
 def splade_enhance(
         docs: List[str], splade: Splade, tokenizer: AutoTokenizer,
-        reverse_voc: Dict[int, str], batch_size=16
+        reverse_voc: Dict[int, str], batch_size=16, jobs=1
 ) -> List[str]:
     sparse_docs = splade_encode(docs, splade, tokenizer)
     quantized = quantize_sparse_8bit(sparse_docs)
     del sparse_docs
-    quantized_batches = np.array_split(quantized, 12)
+    quantized_batches = np.array_split(quantized, jobs)
     recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
-    with torch.multiprocessing.get_context("spawn").Pool(12) as pool:
+    with torch.multiprocessing.get_context("spawn").Pool(jobs) as pool:
         recreated_batches = pool.map(recreate_text_partial, quantized_batches)
 
     flattened = []

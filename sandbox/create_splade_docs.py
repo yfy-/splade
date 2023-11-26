@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("collection")
     parser.add_argument("-b", "--batch-size", type=int, default=100000)
+    parser.add_argument("-e", "--encode-batch-size", type=int, default=16)
+    parser.add_argument("-j", "--jobs", type=int, default=1)
     args = parser.parse_args()
     collection = load_collection(args.collection)
     splade = Splade(MODEL_NAME)
@@ -36,14 +38,14 @@ def main():
         for batch in batches:
             logging.critical(f"Batch size: {len(batch)}")
             doc_splade = splade_enhance(
-                batch, splade, tokenizer, reverse_voc
+                batch, splade, tokenizer, reverse_voc,
+                batch_size=args.encode_batch_size, jobs=args.jobs
             )
             logging.critical(f"Enhanced batch size: {len(doc_splade)}")
             assert len(doc_splade) == len(batch)
             for ds in doc_splade:
                 print(f"{docids[docid_idx]}\t{ds}")
                 docid_idx += 1
-
 
         pbar.update(1)
 
