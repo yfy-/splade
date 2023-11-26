@@ -93,7 +93,7 @@ def splade_enhance(
         docs: List[str], splade: Splade, tokenizer: AutoTokenizer,
         reverse_voc: Dict[int, str], batch_size=16, jobs=1
 ) -> List[str]:
-    sparse_docs = splade_encode(docs, splade, tokenizer)
+    sparse_docs = splade_encode(docs, splade, tokenizer, batch_size=batch_size)
     quantized = quantize_sparse_8bit(sparse_docs)
     del sparse_docs
     quantized_batches = np.array_split(quantized, jobs)
