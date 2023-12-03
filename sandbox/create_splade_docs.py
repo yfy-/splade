@@ -99,11 +99,10 @@ def main():
             recreated = [recreate_text_partial(qb)
                          for qb in quantized_batches]
         # recreated = recreate_text(quantized, reverse_voc)
-        with batch_out_path.open("w") as bofs:
-            for qb in recreated:
-                for d in qb:
-                    bofs.write(f"{docids[docid_idx]}\t{d}\n")
-                    docid_idx += 1
+        for qb in recreated:
+            for d in qb:
+                print(f"{docids[docid_idx]}\t{d}")
+                docid_idx += 1
 
         batch_idx += 1
 
