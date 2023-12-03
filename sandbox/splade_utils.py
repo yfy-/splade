@@ -7,6 +7,7 @@ from typing import List, Dict
 from tqdm import tqdm
 import numpy as np
 from functools import partial
+import logging
 
 
 def load_collection(collection_path: str) -> Dict[int, str]:
@@ -40,27 +41,37 @@ def splade_encode(
 
         with tqdm(total=n, desc="Splade encode") as pbar:
             for batch in batches:
-                tokens = tokenizer(
-                    list(batch), return_tensors="pt", padding=True
-                )
-                if torch.cuda.is_available():
-                    tokens = tokens.to("cuda")
+                try:
+                    tokens = tokenizer(
+                        list(batch),
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True
+                    )
+                    if torch.cuda.is_available():
+                        tokens = tokens.to("cuda")
 
-                text_rep = splade(**{splade_kwargs: tokens})[splade_out].cpu()
-                next_processed = curr_processed + len(batch)
-                sparse_docs[curr_processed: next_processed] = text_rep
-                curr_processed = next_processed
+                    text_rep = splade(**{splade_kwargs: tokens})[splade_out].cpu()
+                    next_processed = curr_processed + len(batch)
+                    sparse_docs[curr_processed: next_processed] = text_rep
+                    curr_processed = next_processed
+                except Exception as ex:
+                    logging.error(batch)
+                    raise ex
                 pbar.update(len(batch))
 
     return sparse_docs
 
+def quantize_sparse_8bit(
+        sparse_text: torch.tensor, glob_max: float = None
+) -> torch.tensor:
+    if glob_max is None:
+        glob_max = torch.max(sparse_text)
 
-def quantize_sparse_8bit(sparse_text: torch.tensor) -> torch.tensor:
-    scale = torch.max(sparse_text) / 256
+    scale = glob_max / 256
     return torch.quantize_per_tensor(
         sparse_text, scale, 0, torch.quint8
     ).int_repr()
-
 
 def recreate_text(
         quantized: torch.tensor, reverse_voc: Dict[int, str]
