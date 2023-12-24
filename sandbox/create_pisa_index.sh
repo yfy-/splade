@@ -1,9 +1,9 @@
 #!/bin/bash
 
-DOCS=splade_msmarco_centroid_unq_3.tsv
-INDEX_NAME=splade_msmarco_centroid_unq_3
+DOCS=$HOME/Datasets/msmarco/msmarco_splade_100k.tsv
+INDEX_NAME=msmarco_splade_100k
 INDEX_ROOT=index
-PISA_BIN="../../pisa/build-rel/bin"
+PISA_BIN="../../pisa-score-cache/build-rel/bin"
 
 cat $DOCS | $PISA_BIN/parse_collection -o $INDEX_ROOT/forward/$INDEX_NAME \
                                        -b 6000 -j 6 --tokenizer whitespace
