@@ -15,7 +15,7 @@ import numpy as np
 from pathlib import Path
 from functools import partial
 
-MODEL_NAME = "naver/splade_v2_max"
+MODEL_NAME = "naver/splade_v2_distil"
 
 
 def main():
@@ -67,7 +67,6 @@ def main():
                 arr=as_np
             )
             torch.save(global_max_weight, max_weight_path)
-            # torch.save(batch_encoded, work_dir / f"splade_encode_{i}.npy)
 
     reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
     docids = list(collection.keys())
@@ -77,7 +76,6 @@ def main():
     while True:
         logging.info(f"Loading: {batch_idx}")
         batch_path = work_dir / f"splade_encode_{batch_idx}.npz"
-        batch_out_path = work_dir / f"msmarco_splade_{batch_idx}.tsv"
         if not batch_path.exists():
             break
         batch_encoded = torch.Tensor(np.load(batch_path)["arr"])
@@ -98,7 +96,7 @@ def main():
         else:
             recreated = [recreate_text_partial(qb)
                          for qb in quantized_batches]
-        # recreated = recreate_text(quantized, reverse_voc)
+
         for qb in recreated:
             for d in qb:
                 print(f"{docids[docid_idx]}\t{d}")
@@ -110,4 +108,5 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    exit(main()
+)

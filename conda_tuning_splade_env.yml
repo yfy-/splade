@@ -1,0 +1,24 @@
+name: splade-tuning
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - h5py
+  - hydra-core
+  - numba
+  - numpy
+  - peft
+  - pip
+  - python=3.8
+  - pytorch
+  - pytorch-cuda=11.8
+  - tensorboard
+  - torchaudio
+  - torchvision
+  - transformers
+  - tqdm
+  - pip:
+    - beir
+    - omegaconf

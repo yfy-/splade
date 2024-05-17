@@ -12,7 +12,7 @@ import logging
 from splade_utils import splade_encode, quantize_local_sparse_8bit, \
     recreate_text
 
-MODEL_NAME = "naver/splade_v2_max"
+MODEL_NAME = "naver/splade_v2_distil"
 
 def load_queries(query_file_stream) -> Tuple[List[str], List[str]]:
     query_lines = query_file_stream.readlines()

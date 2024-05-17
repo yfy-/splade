@@ -3,6 +3,8 @@ import os
 import hydra
 import torch
 from omegaconf import DictConfig, open_dict
+from peft.tuners.lora.config import LoraConfig
+from peft.mapping import get_peft_model
 from torch.utils import data
 
 from conf.CONFIG_CHOICE import CONFIG_NAME, CONFIG_PATH
@@ -21,6 +23,11 @@ from .utils.utils import set_seed, restore_model, get_initialize_config, get_los
 def train(exp_dict: DictConfig):
     exp_dict, config, init_dict, _ = get_initialize_config(exp_dict, train=True)
     model = get_model(config, init_dict)
+    if config.get("lora_tuning"):
+        peft_config = LoraConfig(target_modules=["q_lin", "k_lin"])
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
+
     random_seed = set_seed_from_config(config)
 
     optimizer, scheduler = init_simple_bert_optim(model, lr=config["lr"], warmup_steps=config["warmup_steps"],
