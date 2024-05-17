@@ -28,7 +28,7 @@ def main():
     args = parser.parse_args()
     trec_res: Dict[int, torch.IntTensor] = torch.load(args.trec_torch_file)
     topk_docs = [
-        trec[: args.topk_k].unsqueeze(0) for _, trec in trec_res.items()
+        trec[: args.top_k].unsqueeze(0) for _, trec in trec_res.items()
     ]
     unique_docs = torch.concat(topk_docs, dim=0).unique()
     centroid_pids = torch.load(args.centroid_pids)[:, 0]
