@@ -16,7 +16,7 @@ from splade_utils import (
     splade_encode,
     load_collection,
     quantize_sparse_8bit,
-    recreate_text
+    recreate_text,
 )
 
 
@@ -55,7 +55,9 @@ def main():
         if args.lora_model_name_or_dir:
             peft_config = LoraConfig(target_modules=["q_lin", "k_lin"])
             splade = get_peft_model(splade, peft_config)
-            model_dict = torch.load(args.lora_model_name_or_dir)
+            model_dict = torch.load(
+                Path(args.lora_model_name_or_dir) / "model.tar"
+            )
             splade.load_state_dict(model_dict["model_state_dict"])
 
         if torch.cuda.is_available():
@@ -71,14 +73,15 @@ def main():
             batch_encoded = splade_encode(
                 batch, splade, tokenizer, batch_size=args.encode_batch_size
             )
-            global_max_weight = max(
-                global_max_weight, torch.max(batch_encoded)
+            global_max_weight = max(global_max_weight, torch.max(batch_encoded))
+            as_np = (
+                batch_encoded.detach()
+                .cpu()
+                .resolve_conj()
+                .resolve_neg()
+                .numpy()
             )
-            as_np = batch_encoded.detach().cpu().resolve_conj().resolve_neg().numpy()
-            np.savez_compressed(
-                work_dir / f"splade_encode_{i}.npz",
-                arr=as_np
-            )
+            np.savez_compressed(work_dir / f"splade_encode_{i}.npz", arr=as_np)
             torch.save(global_max_weight, max_weight_path)
 
     reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
@@ -100,15 +103,12 @@ def main():
         quantized_batches = np.array_split(quantized, args.jobs)
         recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
         if args.jobs > 1:
-            with torch.multiprocessing.get_context(
-                    "spawn"
-            ).Pool(args.jobs) as pool:
-                recreated = pool.map(
-                    recreate_text_partial, quantized_batches
-                )
+            with torch.multiprocessing.get_context("spawn").Pool(
+                args.jobs
+            ) as pool:
+                recreated = pool.map(recreate_text_partial, quantized_batches)
         else:
-            recreated = [recreate_text_partial(qb)
-                         for qb in quantized_batches]
+            recreated = [recreate_text_partial(qb) for qb in quantized_batches]
 
         for qb in recreated:
             for d in qb:
@@ -121,5 +121,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main()
-)
+    exit(main())
