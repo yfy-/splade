@@ -59,6 +59,7 @@ def main():
                 Path(args.lora_model_name_or_dir) / "model.tar"
             )
             splade.load_state_dict(model_dict["model_state_dict"])
+            logging.info("LORA model enabled")
 
         if torch.cuda.is_available():
             logging.info("Moving model to cuda.")
