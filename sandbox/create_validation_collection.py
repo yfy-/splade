@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 from typing import Dict
 
 import torch
@@ -19,6 +20,11 @@ def main():
     )
     parser.add_argument("collection", help="Collection tsv file")
     parser.add_argument(
+        "qrel_file",
+        help="Query relevance judgement to add documents from it to the "
+        "collection.",
+    )
+    parser.add_argument(
         "-k",
         "--top-k",
         type=int,
@@ -27,10 +33,23 @@ def main():
     )
     args = parser.parse_args()
     trec_res: Dict[int, torch.IntTensor] = torch.load(args.trec_torch_file)
-    topk_docs = [
-        trec[: args.top_k].unsqueeze(0) for _, trec in trec_res.items()
+
+    # Add documents retrieved from splade baseline
+    docs = [
+        trec[: args.top_k] for _, trec in trec_res.items()
     ]
-    unique_docs = torch.concat(topk_docs, dim=0).unique()
+
+    # Add documents retrieved from colbert ground truth
+    with open(args.qrel_file) as qfs:
+        qrels = json.load(qfs)
+
+    qrel_docs = []
+    for _, qrel_dict in qrels.items():
+        for docid, _ in qrel_dict.items():
+            qrel_docs.append(int(docid))
+
+    docs.append(torch.IntTensor(qrel_docs))
+    unique_docs = torch.concat(docs).unique()
     centroid_pids = torch.load(args.centroid_pids)[:, 0]
     collection = load_collection(args.collection)
     for ud in unique_docs:
