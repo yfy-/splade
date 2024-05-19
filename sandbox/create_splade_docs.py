@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
+from pathlib import Path
+from functools import partial
+
+import numpy as np
+from peft.mapping import get_peft_model
+from peft.tuners.lora.config import LoraConfig
 import torch
-from splade.models.transformer_rep import Splade
 from transformers import AutoTokenizer
+
+from splade.models.transformer_rep import Splade
 from splade_utils import (
     splade_encode,
     load_collection,
     quantize_sparse_8bit,
     recreate_text
 )
-import logging
-import numpy as np
-from pathlib import Path
-from functools import partial
-
-MODEL_NAME = "naver/splade_v2_distil"
 
 
 def main():
@@ -23,13 +25,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("collection")
     parser.add_argument("work_dir")
+    parser.add_argument("model_name_or_dir")
     parser.add_argument("-b", "--batch-size", type=int, default=100000)
     parser.add_argument("-e", "--encode-batch-size", type=int, default=16)
     parser.add_argument("-j", "--jobs", type=int, default=1)
     parser.add_argument("-s", "--skip-encode", action="store_true")
     parser.add_argument("--encode-batch", type=int, default=0)
+    parser.add_argument("-l", "--lora-model-name-or-dir")
     args = parser.parse_args()
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tok_model_name = args.model_name_or_dir
+    if args.lora_model_name_or_dir:
+        tok_model_name = args.lora_model_name_or_dir
+    tokenizer = AutoTokenizer.from_pretrained(tok_model_name)
     collection = load_collection(args.collection)
     logging.info(f"Collection size: {len(collection)}")
     work_dir = Path(args.work_dir)
@@ -44,7 +51,13 @@ def main():
         docs = list(collection.values())
         np_texts = np.array(docs, dtype="object")
         batches = np.array_split(np_texts, num_batches)
-        splade = Splade(MODEL_NAME)
+        splade = Splade(args.model_name_or_dir)
+        if args.lora_model_name_or_dir:
+            peft_config = LoraConfig(target_modules=["q_lin", "k_lin"])
+            splade = get_peft_model(splade, peft_config)
+            model_dict = torch.load(args.lora_model_name_or_dir)
+            splade.load_state_dict(model_dict["model_state_dict"])
+
         if torch.cuda.is_available():
             logging.info("Moving model to cuda.")
             splade = splade.to("cuda")
