@@ -3,11 +3,13 @@
 from splade.models.transformer_rep import Splade
 from transformers import AutoTokenizer
 import torch
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 from tqdm import tqdm
 import numpy as np
 from functools import partial
 import logging
+from peft.mapping import get_peft_model
+from peft.tuners.lora.config import LoraConfig
 
 
 def load_collection(collection_path: str) -> Dict[int, str]:
@@ -22,9 +24,28 @@ def load_collection(collection_path: str) -> Dict[int, str]:
     return docs
 
 
+def load_tokenizer_and_model(
+    model_name_or_dir: str, lora_model_dir: Optional[Path]
+) -> Tuple[AutoTokenizer, Splade]:
+    """Load a splade tokenizer and model."""
+    tok_model_name = model_name_or_dir
+    splade = Splade(model_name_or_dir)
+    if lora_model_dir is not None:
+        tok_model_name = lora_model_dir
+        peft_config = LoraConfig(target_modules=["q_lin", "k_lin"])
+        splade = get_peft_model(splade, peft_config)
+        model_dict = torch.load(lora_model_dir / "model.tar")
+        splade.load_state_dict(model_dict["model_state_dict"])
+
+    return AutoTokenizer.from_pretrained(tok_model_name), splade
+
+
 def splade_encode(
-        texts: List[str], splade: Splade, tokenizer: AutoTokenizer,
-        batch_size=16, is_query=False
+    texts: List[str],
+    splade: Splade,
+    tokenizer: AutoTokenizer,
+    batch_size=16,
+    is_query=False,
 ) -> torch.Tensor:
     n = len(texts)
     splade_kwargs = "d_kwargs"
@@ -46,14 +67,16 @@ def splade_encode(
                         list(batch),
                         return_tensors="pt",
                         padding=True,
-                        truncation=True
+                        truncation=True,
                     )
                     if torch.cuda.is_available():
                         tokens = tokens.to("cuda")
 
-                    text_rep = splade(**{splade_kwargs: tokens})[splade_out].cpu()
+                    text_rep = splade(**{splade_kwargs: tokens})[
+                        splade_out
+                    ].cpu()
                     next_processed = curr_processed + len(batch)
-                    sparse_docs[curr_processed: next_processed] = text_rep
+                    sparse_docs[curr_processed:next_processed] = text_rep
                     curr_processed = next_processed
                 except Exception as ex:
                     logging.error(batch)
@@ -64,7 +87,7 @@ def splade_encode(
 
 
 def quantize_sparse_8bit(
-        sparse_text: torch.tensor, glob_max: float = None
+    sparse_text: torch.tensor, glob_max: float = None
 ) -> torch.tensor:
     if glob_max is None:
         glob_max = torch.max(sparse_text)
@@ -81,13 +104,13 @@ def quantize_local_sparse_8bit(sparse_text: torch.tensor) -> torch.tensor:
         list(sparse_text),
         scale,
         torch.zeros_like(scale, dtype=int),
-        torch.quint8
+        torch.quint8,
     )
     return torch.stack([quant.int_repr() for quant in quantized])
 
 
 def recreate_text(
-        quantized: torch.tensor, reverse_voc: Dict[int, str]
+    quantized: torch.tensor, reverse_voc: Dict[int, str]
 ) -> List[str]:
     n = quantized.shape[0]
     vocab_indices = quantized.nonzero()
@@ -124,8 +147,12 @@ def recreate_text(
 
 
 def splade_enhance(
-        docs: List[str], splade: Splade, tokenizer: AutoTokenizer,
-        reverse_voc: Dict[int, str], batch_size=16, jobs=1
+    docs: List[str],
+    splade: Splade,
+    tokenizer: AutoTokenizer,
+    reverse_voc: Dict[int, str],
+    batch_size=16,
+    jobs=1,
 ) -> List[str]:
     sparse_docs = splade_encode(docs, splade, tokenizer, batch_size=batch_size)
     quantized = quantize_sparse_8bit(sparse_docs)
