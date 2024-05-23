@@ -6,6 +6,7 @@ import numpy as np
 from typing import Tuple, List
 from sys import stdin
 import logging
+from pathlib import Path
 
 from splade_utils import (
     splade_encode,
@@ -39,7 +40,7 @@ def main():
     qids, queries = load_queries(args.queries)
     queries = np.array(queries, dtype="object")
     tokenizer, splade = load_tokenizer_and_model(
-        args.model_name - or_dir, args.lora_model_dir
+        args.model_name_or_dir, Path(args.lora_model_dir)
     )
     if torch.cuda.is_available():
         logging.info("Moving model to cuda")

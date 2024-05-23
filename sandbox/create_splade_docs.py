@@ -32,7 +32,7 @@ def main():
     parser.add_argument("-l", "--lora-model-dir")
     args = parser.parse_args()
     tokenizer, splade = load_tokenizer_and_model(
-        args.model_name_or_dir, args.lora_model_dir
+        args.model_name_or_dir, Path(args.lora_model_dir)
     )
     collection = load_collection(args.collection)
     logging.info(f"Collection size: {len(collection)}")
