@@ -63,12 +63,15 @@ def _main():
     with tqdm(total=sample_pids.shape[0], desc="Create centroid docs") as pbar:
         for cent_id, docids in enumerate(sample_pids):
             concat_doc = ""
-            for did in docids:
+            for i, did in enumerate(docids):
                 did = did.item()
                 if did == -1:
                     continue
 
-                concat_doc += docid2doc[did]
+                if i == 0:
+                    concat_doc = docid2doc[did]
+                else:
+                    concat_doc += " " + docid2doc[did]
 
             args.out_collection.write(f"{cent_id}\t{concat_doc}\n")
             pbar.update(1)
