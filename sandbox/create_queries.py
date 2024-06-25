@@ -39,8 +39,11 @@ def main():
     args = parser.parse_args()
     qids, queries = load_queries(args.queries)
     queries = np.array(queries, dtype="object")
+    lora_model_dir = args.lora_model_dir
+    if lora_model_dir is not None:
+        lora_model_dir = Path(lora_model_dir)
     tokenizer, splade = load_tokenizer_and_model(
-        args.model_name_or_dir, Path(args.lora_model_dir)
+        args.model_name_or_dir, lora_model_dir
     )
     if torch.cuda.is_available():
         logging.info("Moving model to cuda")

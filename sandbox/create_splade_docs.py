@@ -31,8 +31,11 @@ def main():
     parser.add_argument("--encode-batch", type=int, default=0)
     parser.add_argument("-l", "--lora-model-dir")
     args = parser.parse_args()
+    lora_model_dir = args.lora_model_dir
+    if lora_model_dir is not None:
+        lora_model_dir = Path(lora_model_dir)
     tokenizer, splade = load_tokenizer_and_model(
-        args.model_name_or_dir, Path(args.lora_model_dir)
+        args.model_name_or_dir, lora_model_dir
     )
     collection = load_collection(args.collection)
     logging.info(f"Collection size: {len(collection)}")
