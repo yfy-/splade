@@ -30,6 +30,7 @@ def main():
     parser.add_argument("-s", "--skip-encode", action="store_true")
     parser.add_argument("--encode-batch", type=int, default=0)
     parser.add_argument("-l", "--lora-model-dir")
+    parser.add_argument("-d", "--doc-compose")
     args = parser.parse_args()
     lora_model_dir = args.lora_model_dir
     if lora_model_dir is not None:
@@ -38,6 +39,7 @@ def main():
         args.model_name_or_dir, lora_model_dir
     )
     collection = load_collection(args.collection)
+    num_doc = len(collection)
     logging.info(f"Collection size: {len(collection)}")
     work_dir = Path(args.work_dir)
     max_weight_path = work_dir / "global_max_weight.pt"
@@ -46,7 +48,6 @@ def main():
         if max_weight_path.exists():
             global_max_weight = torch.load(max_weight_path)
 
-        num_doc = len(collection)
         num_batches = np.ceil(num_doc / args.batch_size)
         docs = list(collection.values())
         np_texts = np.array(docs, dtype="object")
@@ -75,38 +76,63 @@ def main():
             np.savez_compressed(work_dir / f"splade_encode_{i}.npz", arr=as_np)
             torch.save(global_max_weight, max_weight_path)
 
-    reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
-    docids = list(collection.keys())
-    docid_idx = 0
+    # global_max_weight = torch.load(max_weight_path)
+    if args.doc_compose:
+        docid2docs = torch.load(args.doc_compose)
+        docids = [str(did) for did in range(docid2docs.shape[0])]
+    else:
+        docid2docs = torch.arange(num_doc).reshape(num_doc, 1)
+        docids = list(collection.keys())
+
+    loaded_batches = []
     batch_idx = 0
-    global_max_weight = torch.load(max_weight_path)
-    while True:
+    while (batch_path := work_dir / f"splade_encode_{batch_idx}.npz").exists():
         logging.info(f"Loading: {batch_idx}")
-        batch_path = work_dir / f"splade_encode_{batch_idx}.npz"
-        if not batch_path.exists():
-            break
-        batch_encoded = torch.Tensor(np.load(batch_path)["arr"])
-        logging.info(f"Quantizing: {batch_idx}")
-        quantized = quantize_sparse_8bit(
-            batch_encoded, glob_max=global_max_weight
-        )
-        del batch_encoded
-        quantized_batches = np.array_split(quantized, args.jobs)
-        recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
-        if args.jobs > 1:
-            with torch.multiprocessing.get_context("spawn").Pool(
-                args.jobs
-            ) as pool:
-                recreated = pool.map(recreate_text_partial, quantized_batches)
-        else:
-            recreated = [recreate_text_partial(qb) for qb in quantized_batches]
-
-        for qb in recreated:
-            for d in qb:
-                print(f"{docids[docid_idx]}\t{d}")
-                docid_idx += 1
-
+        loaded_batches.append(torch.Tensor(np.load(batch_path)["arr"]))
         batch_idx += 1
+
+    splade_encoded = torch.cat(loaded_batches, dim=0)
+    composed_docs = torch.empty(
+        (len(docid2docs), splade_encoded.shape[1]), dtype=splade_encoded.dtype
+    )
+
+    docid2idx = {docid: i for i, docid in enumerate(collection.keys())}
+    for did, compose_dids in enumerate(docid2docs):
+        new_doc_weights = None
+        for cd in compose_dids:
+            cd = cd.item()
+            if cd == -1:
+                break
+
+            cd_weights = splade_encoded[docid2idx[cd]].clone()
+            if new_doc_weights is None:
+                new_doc_weights = cd_weights
+            else:
+                new_doc_weights += cd_weights
+
+        composed_docs[did] = new_doc_weights
+
+    reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
+    logging.info("Quantizing..")
+    quantized = quantize_sparse_8bit(
+        composed_docs, glob_max=torch.max(composed_docs)
+    )
+    del composed_docs
+    quantized_batches = np.array_split(quantized, args.jobs)
+    recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
+    if args.jobs > 1:
+        with torch.multiprocessing.get_context("spawn").Pool(
+            args.jobs
+        ) as pool:
+            recreated = pool.map(recreate_text_partial, quantized_batches)
+    else:
+        recreated = [recreate_text_partial(qb) for qb in quantized_batches]
+
+    docidx = 0
+    for qb in recreated:
+        for d in qb:
+            print(f"{docids[docidx]}\t{d}")
+            docidx += 1
 
     return 0
 
