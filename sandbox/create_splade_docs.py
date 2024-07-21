@@ -107,20 +107,17 @@ def main():
             rlookup[docid2idx[cd]].append(did)
 
     composed_docs = torch.empty((len(docid2docs), len(tokenizer.vocab)))
-    num_doc_per_batch = int(np.ceil(num_doc / num_batches))
     last_loaded_batch_idx = 0
     splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+    total_proc = 0
     for i in tqdm(range(num_doc), desc="Doc compose"):
-        if i not in rlookup:
-            logging.info(f"{i} is not used in any doc.")
-            continue
-
-        load_batch_idx = i // num_doc_per_batch
-        if last_loaded_batch_idx != load_batch_idx:
-            last_loaded_batch_idx = load_batch_idx
+        encode_batch_idx = i - total_proc
+        if encode_batch_idx == splade_encode_batch.shape[0]:
+            total_proc += splade_encode_batch.shape[0]
+            last_loaded_batch_idx += 1
             splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+            encode_batch_idx = i - total_proc
 
-        encode_batch_idx = i % num_doc_per_batch
         for did in rlookup[i]:
             logging.info(f"Adding {i} to {did}.")
             composed_docs[did] += splade_encode_batch[encode_batch_idx].clone()
