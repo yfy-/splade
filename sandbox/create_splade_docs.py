@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from collections import defaultdict
 import logging
 from pathlib import Path
 from functools import partial
@@ -8,6 +9,7 @@ from functools import partial
 import numpy as np
 
 import torch
+from tqdm import tqdm
 
 from splade_utils import (
     splade_encode,
@@ -16,6 +18,14 @@ from splade_utils import (
     quantize_sparse_8bit,
     recreate_text,
 )
+
+batch_path_fmt = "splade_encode_{batch_idx}.npz"
+
+
+def load_batch(batch_dir, batch_idx) -> torch.Tensor:
+    batch_path = batch_dir / batch_path_fmt.format(batch_idx=batch_idx)
+    logging.info(f"Loading: {batch_idx}")
+    return torch.Tensor(np.load(batch_path)["arr"])
 
 
 def main():
@@ -40,6 +50,7 @@ def main():
     )
     collection = load_collection(args.collection)
     num_doc = len(collection)
+    num_batches = np.ceil(num_doc / args.batch_size)
     logging.info(f"Collection size: {len(collection)}")
     work_dir = Path(args.work_dir)
     max_weight_path = work_dir / "global_max_weight.pt"
@@ -48,7 +59,6 @@ def main():
         if max_weight_path.exists():
             global_max_weight = torch.load(max_weight_path)
 
-        num_batches = np.ceil(num_doc / args.batch_size)
         docs = list(collection.values())
         np_texts = np.array(docs, dtype="object")
         batches = np.array_split(np_texts, num_batches)
@@ -73,7 +83,9 @@ def main():
                 .resolve_neg()
                 .numpy()
             )
-            np.savez_compressed(work_dir / f"splade_encode_{i}.npz", arr=as_np)
+            np.savez_compressed(
+                work_dir / batch_path_fmt.format(batch_idx=i), arr=as_np
+            )
             torch.save(global_max_weight, max_weight_path)
 
     # global_max_weight = torch.load(max_weight_path)
@@ -84,33 +96,34 @@ def main():
         docid2docs = torch.arange(num_doc).reshape(num_doc, 1)
         docids = list(collection.keys())
 
-    loaded_batches = []
-    batch_idx = 0
-    while (batch_path := work_dir / f"splade_encode_{batch_idx}.npz").exists():
-        logging.info(f"Loading: {batch_idx}")
-        loaded_batches.append(torch.Tensor(np.load(batch_path)["arr"]))
-        batch_idx += 1
-
-    splade_encoded = torch.cat(loaded_batches, dim=0)
-    composed_docs = torch.empty(
-        (len(docid2docs), splade_encoded.shape[1]), dtype=splade_encoded.dtype
-    )
-
     docid2idx = {docid: i for i, docid in enumerate(collection.keys())}
+    rlookup = defaultdict(list)
     for did, compose_dids in enumerate(docid2docs):
-        new_doc_weights = None
         for cd in compose_dids:
             cd = cd.item()
             if cd == -1:
                 break
 
-            cd_weights = splade_encoded[docid2idx[cd]].clone()
-            if new_doc_weights is None:
-                new_doc_weights = cd_weights
-            else:
-                new_doc_weights += cd_weights
+            rlookup[docid2idx[cd]].append(did)
 
-        composed_docs[did] = new_doc_weights
+    composed_docs = torch.empty((len(docid2docs), len(tokenizer.vocab)))
+    num_doc_per_batch = int(np.ceil(num_doc / num_batches))
+    last_loaded_batch_idx = 0
+    splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+    for i in tqdm(range(num_doc), desc="Doc compose"):
+        if i not in rlookup:
+            logging.info(f"{i} is not used in any doc.")
+            continue
+
+        load_batch_idx = i // num_doc_per_batch
+        if last_loaded_batch_idx != load_batch_idx:
+            last_loaded_batch_idx = load_batch_idx
+            splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+
+        encode_batch_idx = i % num_doc_per_batch
+        for did in rlookup[i]:
+            logging.info(f"Adding {i} to {did}.")
+            composed_docs[did] += splade_encode_batch[encode_batch_idx].clone()
 
     reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
     logging.info("Quantizing..")
@@ -121,9 +134,7 @@ def main():
     quantized_batches = np.array_split(quantized, args.jobs)
     recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
     if args.jobs > 1:
-        with torch.multiprocessing.get_context("spawn").Pool(
-            args.jobs
-        ) as pool:
+        with torch.multiprocessing.get_context("spawn").Pool(args.jobs) as pool:
             recreated = pool.map(recreate_text_partial, quantized_batches)
     else:
         recreated = [recreate_text_partial(qb) for qb in quantized_batches]
