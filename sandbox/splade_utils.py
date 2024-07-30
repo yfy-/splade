@@ -112,37 +112,20 @@ def quantize_local_sparse_8bit(sparse_text: torch.tensor) -> torch.tensor:
 
 def recreate_text(
     quantized: torch.tensor, reverse_voc: Dict[int, str]
-) -> List[str]:
+) -> List[Dict[str, int]]:
     n = quantized.shape[0]
     vocab_indices = quantized.nonzero()
     logging.debug(f"Num non-zero: {len(vocab_indices)}")
-    enhanced_docs = [""] * n
+    enhanced_docs = [dict() for _ in range(n)]
     prev_i = 0
     with tqdm(total=n, desc="Text recreate") as pbar:
-        doc_toks = []
         for doc_i, term_i in vocab_indices:
             doc_i = doc_i.item()
             term_i = term_i.item()
+            enhanced_docs[doc_i][reverse_voc[term_i]] = quantized[doc_i, term_i]
             if doc_i != prev_i:
-                enhanced_docs[prev_i] = " ".join(doc_toks)
-                doc_toks.clear()
-                pbar.update(1)
-                # If we don't jump from doc-id x to x + 1, that means
-                # doc's in between should be empty.
-                for empty_doc_i in range(prev_i + 1, doc_i):
-                    enhanced_docs[empty_doc_i] = ""
-                    pbar.update(1)
-
+                pbar.update(doc_i - prev_i)
                 prev_i = doc_i
-
-            doc_toks.append(
-                " ".join([reverse_voc[term_i]] * quantized[doc_i, term_i])
-            )
-        enhanced_docs[prev_i] = " ".join(doc_toks)
-        pbar.update(1)
-        for empty_doc_i in range(prev_i + 1, n):
-            enhanced_docs[empty_doc_i] = ""
-            pbar.update(1)
 
     return enhanced_docs
 
