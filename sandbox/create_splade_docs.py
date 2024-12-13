@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
 import argparse
 from collections import defaultdict
-import logging
-import os.path
-from pathlib import Path
 from functools import partial
+import logging
+from pathlib import Path
+from psutil import virtual_memory
+from shutil import rmtree
+from typing import Tuple
 
 import numpy as np
 
@@ -19,6 +22,74 @@ from splade_utils import (
     quantize_sparse_8bit,
     recreate_text,
 )
+
+
+class BatchTensorDiskLoaderIterator:
+    def __init__(self, loader: BatchTensorDiskLoader):
+        self.loader = loader
+        self.curr = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> torch.Tensor:
+        if self.curr >= self.loader.shape[0]:
+            raise StopIteration
+
+        res, _ = self.loader[self.curr]
+        self.curr += self.loader.batch_size
+        return res
+
+
+class BatchTensorDiskLoader:
+    def __init__(
+        self, tensor_dir: Path, shape: Tuple[int, int], batch_size=int(1e6)
+    ):
+        self.tensor_dir = tensor_dir
+        self.shape = shape
+        self.batch_size = min(batch_size, self.shape[0])
+        self.tensor = None
+        self.loaded_batch_idx = None
+
+    def _save_batch(self):
+        if self.loaded_batch_idx is not None:
+            old_batch_path = (
+                self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
+            )
+            torch.save(self.tensor, old_batch_path)
+
+    def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
+        if row_idx > self.shape[0]:
+            raise KeyError(row_idx)
+
+        batch_idx = row_idx // self.batch_size
+        batch_tensor_idx = row_idx % self.batch_size
+        if batch_idx != self.loaded_batch_idx:
+            self._save_batch()
+            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
+            if batch_path.exists():
+                self.tensor = torch.load(batch_path)
+            else:
+                self.tensor = torch.zeros((self.batch_size, self.shape[1]))
+
+            self.loaded_batch_idx = batch_idx
+
+        return self.tensor, batch_tensor_idx
+
+    def __enter__(self):
+        self.dir_created = self.tensor_dir.exists()
+        self.tensor_dir.mkdir(exist_ok=True, parents=True)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self._save_batch()
+        elif self.dir_created:
+            rmtree(self.tensor_dir)
+
+    def batch_iter(self) -> BatchTensorDiskLoaderIterator:
+        return BatchTensorDiskLoaderIterator(self)
+
 
 batch_path_fmt = "splade_encode_{batch_idx}.npz"
 
@@ -99,112 +170,153 @@ def main():
         docid2docs = torch.arange(num_doc).reshape(num_doc, 1)
         docids = list(collection.keys())
 
-    if not os.path.exists(args.compose_cache_path):
-        # Take nearest percent of passages for each centroid
-        if args.nearest_percent < 1.0:
-            psg_counts = torch.sum(docid2docs != -1, dim=1, keepdim=True)
-            psg_counts_keep = torch.ceil(psg_counts * args.nearest_percent).int()
-            remove_mask = (
-                torch.arange(docid2docs.shape[1]).repeat(docid2docs.shape[0], 1)
-                >= psg_counts_keep
-            )
-            docid2docs[remove_mask] = -1.0
+    # Take average of splade encoding for each centroid by loading
+    # them batch by batch.
+    compose_cache_path = Path(args.compose_cache_path)
+    use_cache = compose_cache_path.exists()
+    mem_limit = virtual_memory().total // 4
+    composed_shape = (len(docid2docs), len(tokenizer.vocab))
+    batch_size = mem_limit // (composed_shape[1] * 4)
+    logging.info(f"Composed batch_size={batch_size}")
+    with BatchTensorDiskLoader(
+        compose_cache_path,
+        composed_shape,
+        batch_size=batch_size,
+    ) as composed_docs_loader:
+        if not use_cache:
+            # Take nearest percent of passages for each centroid
+            if args.nearest_percent < 1.0:
+                psg_counts = torch.sum(docid2docs != -1, dim=1, keepdim=True)
+                psg_counts_keep = torch.ceil(
+                    psg_counts * args.nearest_percent
+                ).int()
+                remove_mask = (
+                    torch.arange(docid2docs.shape[1]).repeat(
+                        docid2docs.shape[0], 1
+                    )
+                    >= psg_counts_keep
+                )
+                docid2docs[remove_mask] = -1.0
 
-        # Create a lookup dict where keys are passages and values are a
-        # list of centroids they appear. This way we can load splade
-        # vector batches in sequantial order to not blow up the memory.
-        docid2idx = {docid: i for i, docid in enumerate(collection.keys())}
-        rlookup = defaultdict(list)
-        for did, compose_dids in tqdm(
-            enumerate(docid2docs),
-            desc="Build reverse lookup",
-            total=len(docid2docs),
-        ):
-            for cd in compose_dids:
-                cd = cd.item()
-                if cd == -1:
-                    break
+            # Create a lookup dict where keys are passages and values are a
+            # list of centroids they appear. This way we can load splade
+            # vector batches in sequential order to not blow up the memory.
+            docid2idx = {docid: i for i, docid in enumerate(collection.keys())}
+            rlookup = defaultdict(list)
+            for did, compose_dids in tqdm(
+                enumerate(docid2docs),
+                desc="Build reverse lookup",
+                total=len(docid2docs),
+            ):
+                for cd in compose_dids:
+                    cd = cd.item()
+                    if cd == -1:
+                        break
 
-                rlookup[docid2idx[cd]].append(did)
+                    rlookup[docid2idx[cd]].append(did)
 
-        # Take average of splade encoding for each centroid by loading
-        # them batch by batch.
-        composed_docs = torch.empty((len(docid2docs), len(tokenizer.vocab)))
-        num_psg_cent = torch.zeros((len(docid2docs), 1))
-        del docid2docs
-        last_loaded_batch_idx = 0
-        splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
-        total_proc = 0
-        for i in tqdm(range(num_doc), desc="Doc compose"):
-            encode_batch_idx = i - total_proc
-            if encode_batch_idx == splade_encode_batch.shape[0]:
-                total_proc += splade_encode_batch.shape[0]
-                last_loaded_batch_idx += 1
-                splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+            num_psg_cent = torch.zeros((len(docid2docs), 1))
+            del docid2docs
+            last_loaded_batch_idx = 0
+            splade_encode_batch = load_batch(work_dir, last_loaded_batch_idx)
+            total_proc = 0
+            for i in tqdm(range(num_doc), desc="Doc compose"):
                 encode_batch_idx = i - total_proc
+                if encode_batch_idx == splade_encode_batch.shape[0]:
+                    total_proc += splade_encode_batch.shape[0]
+                    last_loaded_batch_idx += 1
+                    splade_encode_batch = load_batch(
+                        work_dir, last_loaded_batch_idx
+                    )
+                    encode_batch_idx = i - total_proc
 
-            for did in rlookup[i]:
-                composed_docs[did] += splade_encode_batch[encode_batch_idx].clone()
-                num_psg_cent[did] += 1
+                for did in rlookup[i]:
+                    composed_docs, cdi = composed_docs_loader[did]
+                    composed_docs[cdi] += splade_encode_batch[
+                        encode_batch_idx
+                    ].clone()
+                    num_psg_cent[did] += 1
 
-        del rlookup
-        composed_docs /= num_psg_cent
-        torch.save(composed_docs, args.compose_cache_path)
-    else:
-        del docid2docs
-        composed_docs = torch.load(args.compose_cache_path, map_location="cpu")
-
-    # Prune each centroid vector to its specified L1 submass.
-    if args.pruning_submass < 1.0:
-        logging.info(f"Pruning submass factor: {args.pruning_submass}")
-        tot_set = 0
-        for i in tqdm(
-            range(len(composed_docs)), total=len(composed_docs), desc="Pruning"
-        ):
-            doc_sorted, sort_idx = torch.sort(composed_docs[i], descending=True)
-            doc_cumsum = torch.cumsum(doc_sorted, dim=0)
-            # Normalize with largest num
-            doc_cumsum /= doc_cumsum[-1:].clone()
-            search_idx = torch.searchsorted(doc_cumsum, args.pruning_submass)
-            keep_mask = torch.arange(len(sort_idx)) <= search_idx
-
-            prune_mask = torch.ones(len(sort_idx), dtype=torch.bool)
-
-            # Set most important dimensions to False so that we do not set
-            # them to 0.0.
-            prune_mask[sort_idx[keep_mask]] = False
-            composed_docs[i][prune_mask] = 0.0
-            tot_set += torch.sum(composed_docs[i] > 0.0).item()
-
-        logging.info(f"Avg dim set: {tot_set / len(composed_docs)}")
-
-    # Quantize and then reconstruct textual documents.
-    reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
-    logging.info("Quantizing..")
-    quantized = quantize_sparse_8bit(
-        composed_docs, glob_max=torch.max(composed_docs)
-    )
-    del composed_docs
-    docidx = 0
-    for q_split in quantized.split(10000):
-        quantized_batches = np.array_split(q_split, args.jobs)
-        recreate_text_partial = partial(recreate_text, reverse_voc=reverse_voc)
-        if args.jobs > 1:
-            with torch.multiprocessing.get_context("spawn").Pool(
-                args.jobs
-            ) as pool:
-                recreated = pool.map(recreate_text_partial, quantized_batches)
+            del rlookup
+            c_batch_size = composed_docs_loader.batch_size
+            i = 0
+            for composed_docs in composed_docs_loader.batch_iter():
+                composed_docs /= num_psg_cent[i : i + c_batch_size]
+                i += c_batch_size
         else:
-            recreated = [recreate_text_partial(qb) for qb in quantized_batches]
+            del docid2docs
 
-        for qb in recreated:
-            for d in qb:
-                print(f"{docids[docidx]}\t", end="")
-                for term, weight in d.items():
-                    for _ in range(weight):
-                        print(f"{term} ", end="")
-                print("")
-                docidx += 1
+        # Prune each centroid vector to its specified L1 submass.
+        if args.pruning_submass < 1.0:
+            logging.info(f"Pruning submass factor: {args.pruning_submass}")
+            tot_set = 0
+            for i in tqdm(
+                range(composed_docs_loader.shape[0]),
+                total=composed_docs_loader.shape[0],
+                desc="Pruning",
+            ):
+                composed_docs, cdi = composed_docs_loader[i]
+                doc_sorted, sort_idx = torch.sort(
+                    composed_docs[cdi], descending=True
+                )
+                doc_cumsum = torch.cumsum(doc_sorted, dim=0)
+                # Normalize with largest num
+                doc_cumsum /= doc_cumsum[-1:].clone()
+                search_idx = torch.searchsorted(
+                    doc_cumsum, args.pruning_submass
+                )
+                keep_mask = torch.arange(len(sort_idx)) <= search_idx
+
+                prune_mask = torch.ones(len(sort_idx), dtype=torch.bool)
+
+                # Set most important dimensions to False so that
+                # we do not set them to 0.0.
+                prune_mask[sort_idx[keep_mask]] = False
+                composed_docs[cdi][prune_mask] = 0.0
+                tot_set += torch.sum(composed_docs[cdi] > 0.0).item()
+
+            logging.info(f"Avg dim set: {tot_set / len(composed_docs)}")
+
+        # Quantize and then reconstruct textual documents.
+        reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
+        logging.info("Quantizing..")
+
+        composed_docs_max = 0.0
+        for composed_docs in composed_docs_loader.batch_iter():
+            composed_docs_max = max(
+                torch.max(composed_docs).item(), composed_docs_max
+            )
+
+        for composed_docs in composed_docs_loader.batch_iter():
+            quantized = quantize_sparse_8bit(
+                composed_docs, glob_max=composed_docs_max
+            )
+            docidx = 0
+            for q_split in quantized.split(10000):
+                quantized_batches = np.array_split(q_split, args.jobs)
+                recreate_text_partial = partial(
+                    recreate_text, reverse_voc=reverse_voc
+                )
+                if args.jobs > 1:
+                    with torch.multiprocessing.get_context("spawn").Pool(
+                        args.jobs
+                    ) as pool:
+                        recreated = pool.map(
+                            recreate_text_partial, quantized_batches
+                        )
+                else:
+                    recreated = [
+                        recreate_text_partial(qb) for qb in quantized_batches
+                    ]
+
+                for qb in recreated:
+                    for d in qb:
+                        print(f"{docids[docidx]}\t", end="")
+                        for term, weight in d.items():
+                            for _ in range(weight):
+                                print(f"{term} ", end="")
+                        print("")
+                        docidx += 1
     return 0
 
 
