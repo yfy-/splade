@@ -48,6 +48,7 @@ class BatchTensorDiskLoader:
         self.tensor_dir = tensor_dir
         self.shape = shape
         self.batch_size = min(batch_size, self.shape[0])
+        self.num_batch = int(np.ceil(self.shape[0] / self.batch_size))
         self.tensor = None
         self.loaded_batch_idx = None
 
@@ -55,16 +56,10 @@ class BatchTensorDiskLoader:
         if self.loaded_batch_idx is None:
             return
 
-        old_batch_path = (
-            self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
-        )
+        old_batch_path = self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
         np.savez_compressed(
             old_batch_path,
-            arr=self.tensor.detach()
-            .cpu()
-            .resolve_conj()
-            .resolve_neg()
-            .numpy(),
+            arr=self.tensor.detach().cpu().resolve_conj().resolve_neg().numpy(),
         )
 
     def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
@@ -79,7 +74,13 @@ class BatchTensorDiskLoader:
             if batch_path.exists():
                 self.tensor = torch.Tensor(np.load(batch_path)["arr"])
             else:
-                self.tensor = torch.zeros((self.batch_size, self.shape[1]))
+                batch_size = self.batch_size
+                if batch_idx == self.num_batch - 1:
+                    batch_size = (
+                        self.shape[0] - ((self.num_batch - 1) * self.batch_size)
+                    )
+
+                self.tensor = torch.zeros((batch_size, self.shape[1]))
 
             self.loaded_batch_idx = batch_idx
 
