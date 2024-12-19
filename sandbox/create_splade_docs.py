@@ -69,7 +69,7 @@ class BatchTensorDiskLoader:
         )
 
     def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
-        return self.__get_item(self, row_idx, save=True)
+        return self.__get_item(row_idx, save=True)
 
     def __get_item(self, row_idx: int, save=True):
         if row_idx > self.shape[0]:
