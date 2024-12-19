@@ -25,9 +25,10 @@ from splade_utils import (
 
 
 class BatchTensorDiskLoaderIterator:
-    def __init__(self, loader: BatchTensorDiskLoader):
+    def __init__(self, loader: BatchTensorDiskLoader, immut=False):
         self.loader = loader
         self.curr = 0
+        self.immut = immut
 
     def __iter__(self):
         return self
@@ -36,7 +37,11 @@ class BatchTensorDiskLoaderIterator:
         if self.curr >= self.loader.shape[0]:
             raise StopIteration
 
-        res, _ = self.loader[self.curr]
+        res, _ = (
+            self.loader.getitem_immut(self.curr)
+            if self.immut
+            else self.loader[self.curr]
+        )
         self.curr += self.loader.batch_size
         return res
 
@@ -63,21 +68,26 @@ class BatchTensorDiskLoader:
         )
 
     def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
+        return self.__get_item(self, row_idx, save=True)
+
+    def __get_item(self, row_idx: int, save=True):
         if row_idx > self.shape[0]:
             raise KeyError(row_idx)
 
         batch_idx = row_idx // self.batch_size
         batch_tensor_idx = row_idx % self.batch_size
         if batch_idx != self.loaded_batch_idx:
-            self._save_batch()
+            if save:
+                self._save_batch()
+
             batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
             if batch_path.exists():
                 self.tensor = torch.Tensor(np.load(batch_path)["arr"])
             else:
                 batch_size = self.batch_size
                 if batch_idx == self.num_batch - 1:
-                    batch_size = (
-                        self.shape[0] - ((self.num_batch - 1) * self.batch_size)
+                    batch_size = self.shape[0] - (
+                        (self.num_batch - 1) * self.batch_size
                     )
 
                 self.tensor = torch.zeros((batch_size, self.shape[1]))
@@ -85,6 +95,9 @@ class BatchTensorDiskLoader:
             self.loaded_batch_idx = batch_idx
 
         return self.tensor, batch_tensor_idx
+
+    def getitem_immut(self, row_idx):
+        return self.__get_item(row_idx, save=False)
 
     def __enter__(self):
         self.dir_created = self.tensor_dir.exists()
@@ -97,8 +110,8 @@ class BatchTensorDiskLoader:
         elif self.dir_created:
             rmtree(self.tensor_dir)
 
-    def batch_iter(self) -> BatchTensorDiskLoaderIterator:
-        return BatchTensorDiskLoaderIterator(self)
+    def batch_iter(self, immut=False) -> BatchTensorDiskLoaderIterator:
+        return BatchTensorDiskLoaderIterator(self, immut=immut)
 
 
 batch_path_fmt = "splade_encode_{batch_idx}.npz"
@@ -292,12 +305,12 @@ def main():
         logging.info("Quantizing..")
 
         composed_docs_max = 0.0
-        for composed_docs in composed_docs_loader.batch_iter():
+        for composed_docs in composed_docs_loader.batch_iter(immut=True):
             composed_docs_max = max(
                 torch.max(composed_docs).item(), composed_docs_max
             )
 
-        for composed_docs in composed_docs_loader.batch_iter():
+        for composed_docs in composed_docs_loader.batch_iter(immut=True):
             quantized = quantize_sparse_8bit(
                 composed_docs, glob_max=composed_docs_max
             )
