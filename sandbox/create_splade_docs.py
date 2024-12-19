@@ -100,7 +100,7 @@ class BatchTensorDiskLoader:
         return self.__get_item(row_idx, save=False)
 
     def __enter__(self):
-        self.dir_created = self.tensor_dir.exists()
+        self.dir_created = not self.tensor_dir.exists()
         self.tensor_dir.mkdir(exist_ok=True, parents=True)
         return self
 
