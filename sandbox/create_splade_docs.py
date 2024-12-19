@@ -62,6 +62,7 @@ class BatchTensorDiskLoader:
             return
 
         old_batch_path = self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
+        logging.info(f"Saving {old_batch_path}")
         np.savez_compressed(
             old_batch_path,
             arr=self.tensor.detach().cpu().resolve_conj().resolve_neg().numpy(),
@@ -82,6 +83,7 @@ class BatchTensorDiskLoader:
 
             batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
             if batch_path.exists():
+                logging.info(f"Loading {batch_path}")
                 self.tensor = torch.Tensor(np.load(batch_path)["arr"])
             else:
                 batch_size = self.batch_size
