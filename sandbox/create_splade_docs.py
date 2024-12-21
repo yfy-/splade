@@ -81,7 +81,7 @@ class BatchTensorDiskLoader:
             if save:
                 self._save_batch()
 
-            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
+            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt.npz"
             if batch_path.exists():
                 logging.info(f"Loading {batch_path}")
                 self.tensor = torch.Tensor(np.load(batch_path)["arr"])
