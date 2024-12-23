@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Create splade docs in text format."""
+
 from __future__ import annotations
 import argparse
 from collections import defaultdict
@@ -25,15 +27,25 @@ from splade_utils import (
 
 
 class BatchTensorDiskLoaderIterator:
+    """Iterator for batched tensors serializable to disk."""
+
     def __init__(self, loader: BatchTensorDiskLoader, immut=False):
+        """Initialize the iterator.
+
+        Args:
+          loader: Batch tensor disk loader.
+          immut: True if the batched tensors are used for read-only purposes.
+        """
         self.loader = loader
         self.curr = 0
         self.immut = immut
 
     def __iter__(self):
+        """Create an iterator."""
         return self
 
     def __next__(self) -> torch.Tensor:
+        """Get next batch."""
         if self.curr >= self.loader.shape[0]:
             raise StopIteration
 
@@ -63,6 +75,8 @@ class BatchTensorDiskLoader:
 
         old_batch_path = self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
         logging.info(f"Saving {old_batch_path}")
+        # TODO: Try torch sparse format for saving and reading sparse
+        # tensors instead of numpy compressed.
         np.savez_compressed(
             old_batch_path,
             arr=self.tensor.detach().cpu().resolve_conj().resolve_neg().numpy(),
@@ -312,11 +326,11 @@ def main():
                 torch.max(composed_docs).item(), composed_docs_max
             )
 
+        docidx = 0
         for composed_docs in composed_docs_loader.batch_iter(immut=True):
             quantized = quantize_sparse_8bit(
                 composed_docs, glob_max=composed_docs_max
             )
-            docidx = 0
             for q_split in quantized.split(10000):
                 quantized_batches = np.array_split(q_split, args.jobs)
                 recreate_text_partial = partial(
