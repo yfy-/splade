@@ -26,7 +26,7 @@ from splade_utils import (
 )
 
 
-class BatchTensorDiskLoaderIterator:
+class BatchSparseTensorDiskLoaderIterator:
     """Iterator for batched tensors serializable to disk."""
 
     def __init__(self, loader: BatchTensorDiskLoader, immut=False):
@@ -58,7 +58,7 @@ class BatchTensorDiskLoaderIterator:
         return res
 
 
-class BatchTensorDiskLoader:
+class BatchSparseTensorDiskLoader:
     def __init__(
         self, tensor_dir: Path, shape: Tuple[int, int], batch_size=int(1e6)
     ):
@@ -75,12 +75,7 @@ class BatchTensorDiskLoader:
 
         old_batch_path = self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
         logging.info(f"Saving {old_batch_path}")
-        # TODO: Try torch sparse format for saving and reading sparse
-        # tensors instead of numpy compressed.
-        np.savez_compressed(
-            old_batch_path,
-            arr=self.tensor.detach().cpu().resolve_conj().resolve_neg().numpy(),
-        )
+        torch.save(self.tensor.to_sparse(), old_batch_path)
 
     def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
         return self.__get_item(row_idx, save=True)
@@ -98,7 +93,7 @@ class BatchTensorDiskLoader:
             batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt.npz"
             if batch_path.exists():
                 logging.info(f"Loading {batch_path}")
-                self.tensor = torch.Tensor(np.load(batch_path)["arr"])
+                self.tensor = torch.load(batch_path).to_dense()
             else:
                 batch_size = self.batch_size
                 if batch_idx == self.num_batch - 1:
@@ -126,8 +121,8 @@ class BatchTensorDiskLoader:
         elif self.dir_created:
             rmtree(self.tensor_dir)
 
-    def batch_iter(self, immut=False) -> BatchTensorDiskLoaderIterator:
-        return BatchTensorDiskLoaderIterator(self, immut=immut)
+    def batch_iter(self, immut=False) -> BatchSparseTensorDiskLoaderIterator:
+        return BatchSparseTensorDiskLoaderIterator(self, immut=immut)
 
 
 batch_path_fmt = "splade_encode_{batch_idx}.npz"
@@ -217,7 +212,7 @@ def main():
     composed_shape = (len(docid2docs), len(tokenizer.vocab))
     batch_size = mem_limit // (composed_shape[1] * 4)
     logging.info(f"Composed batch_size={batch_size}")
-    with BatchTensorDiskLoader(
+    with BatchSparseTensorDiskLoader(
         compose_cache_path,
         composed_shape,
         batch_size=batch_size,
