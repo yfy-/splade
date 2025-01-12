@@ -60,7 +60,12 @@ def main():
         reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
         enhanced_queries = recreate_text(quantized, reverse_voc)
         for eq in enhanced_queries:
-            print(f"{qids[query_idx]}: {eq}")
+            print(f"{qids[query_idx]}: ", end="")
+            for q_term, term_w in eq.items():
+                for _ in range(term_w):
+                    print(f"{q_term} ", end="")
+
+            print("")
             query_idx += 1
 
     return 0
