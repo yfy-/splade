@@ -90,7 +90,7 @@ class BatchSparseTensorDiskLoader:
             if save:
                 self._save_batch()
 
-            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt.npz"
+            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
             if batch_path.exists():
                 logging.info(f"Loading {batch_path}")
                 self.tensor = torch.load(batch_path).to_dense()
@@ -326,7 +326,7 @@ def main():
             quantized = quantize_sparse_8bit(
                 composed_docs, glob_max=composed_docs_max
             )
-            for q_split in quantized.split(10000):
+            for q_split in quantized.split(5000):
                 quantized_batches = np.array_split(q_split, args.jobs)
                 recreate_text_partial = partial(
                     recreate_text, reverse_voc=reverse_voc
