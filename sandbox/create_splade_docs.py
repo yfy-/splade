@@ -29,7 +29,7 @@ from splade_utils import (
 class BatchSparseTensorDiskLoaderIterator:
     """Iterator for batched tensors serializable to disk."""
 
-    def __init__(self, loader: BatchTensorDiskLoader, immut=False):
+    def __init__(self, loader: BatchSparseTensorDiskLoader, immut=False):
         """Initialize the iterator.
 
         Args:
@@ -81,7 +81,7 @@ class BatchSparseTensorDiskLoader:
         return self.__get_item(row_idx, save=True)
 
     def __get_item(self, row_idx: int, save=True):
-        if row_idx > self.shape[0]:
+        if row_idx >= self.shape[0]:
             raise KeyError(row_idx)
 
         batch_idx = row_idx // self.batch_size
