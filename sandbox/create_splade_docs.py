@@ -9,7 +9,7 @@ from functools import partial
 import logging
 from pathlib import Path
 from psutil import virtual_memory
-from shutil import rmtree
+from shutil import rmtree, copytree
 from typing import Tuple
 
 import numpy as np
@@ -63,6 +63,7 @@ class BatchSparseTensorDiskLoader:
         self, tensor_dir: Path, shape: Tuple[int, int], batch_size=int(1e6)
     ):
         self.tensor_dir = tensor_dir
+        self.work_dir = tensor_dir / "workdir"
         self.shape = shape
         self.batch_size = min(batch_size, self.shape[0])
         self.num_batch = int(np.ceil(self.shape[0] / self.batch_size))
@@ -73,9 +74,23 @@ class BatchSparseTensorDiskLoader:
         if self.loaded_batch_idx is None:
             return
 
-        old_batch_path = self.tensor_dir / f"tensor_{self.loaded_batch_idx}.pt"
+        old_batch_path = self.work_dir / f"tensor_{self.loaded_batch_idx}.pt"
         logging.info(f"Saving {old_batch_path}")
         torch.save(self.tensor.to_sparse(), old_batch_path)
+
+    def checkpoint(self, checkpoint: str):
+        logging.info(f"Creating checkpoint: {checkpoint}")
+        self._save_batch()
+        copytree(self.work_dir, self.tensor_dir / checkpoint)
+
+    def load_from_checkpoint(self, checkpoint: str) -> bool:
+        checkpoint_p = self.tensor_dir / checkpoint
+        if not checkpoint_p.exists():
+            return False
+
+        logging.info(f"Loading from checkpoint: {checkpoint}")
+        copytree(checkpoint_p, self.work_dir, dirs_exist_ok=True)
+        return True
 
     def __getitem__(self, row_idx: int) -> Tuple[torch.Tensor, int]:
         return self.__get_item(row_idx, save=True)
@@ -90,7 +105,7 @@ class BatchSparseTensorDiskLoader:
             if save:
                 self._save_batch()
 
-            batch_path = self.tensor_dir / f"tensor_{batch_idx}.pt"
+            batch_path = self.work_dir / f"tensor_{batch_idx}.pt"
             if batch_path.exists():
                 logging.info(f"Loading {batch_path}")
                 self.tensor = torch.load(batch_path).to_dense()
@@ -111,15 +126,12 @@ class BatchSparseTensorDiskLoader:
         return self.__get_item(row_idx, save=False)
 
     def __enter__(self):
-        self.dir_created = not self.tensor_dir.exists()
-        self.tensor_dir.mkdir(exist_ok=True, parents=True)
+        self.work_dir.mkdir(exist_ok=True, parents=True)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type is None:
-            self._save_batch()
-        elif self.dir_created:
-            rmtree(self.tensor_dir)
+        self._save_batch()
+        rmtree(self.work_dir)
 
     def batch_iter(self, immut=False) -> BatchSparseTensorDiskLoaderIterator:
         return BatchSparseTensorDiskLoaderIterator(self, immut=immut)
@@ -207,17 +219,18 @@ def main():
     # Take average of splade encoding for each centroid by loading
     # them batch by batch.
     compose_cache_path = Path(args.compose_cache_path)
-    use_cache = compose_cache_path.exists()
+    # use_cache = compose_cache_path.exists()
     mem_limit = virtual_memory().total // 4
     composed_shape = (len(docid2docs), len(tokenizer.vocab))
     batch_size = mem_limit // (composed_shape[1] * 4)
     logging.info(f"Composed batch_size={batch_size}")
+    compose_cp = "compose-checkpoint"
     with BatchSparseTensorDiskLoader(
         compose_cache_path,
         composed_shape,
         batch_size=batch_size,
     ) as composed_docs_loader:
-        if not use_cache:
+        if not composed_docs_loader.load_from_checkpoint(compose_cp):
             # Take nearest percent of passages for each centroid
             if args.nearest_percent < 1.0:
                 psg_counts = torch.sum(docid2docs != -1, dim=1, keepdim=True)
@@ -277,6 +290,8 @@ def main():
             for composed_docs in composed_docs_loader.batch_iter():
                 composed_docs /= num_psg_cent[i : i + c_batch_size]
                 i += c_batch_size
+
+            composed_docs_loader.checkpoint(compose_cp)
         else:
             del docid2docs
 
