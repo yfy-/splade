@@ -122,7 +122,9 @@ def recreate_text(
         for doc_i, term_i in vocab_indices:
             doc_i = doc_i.item()
             term_i = term_i.item()
-            enhanced_docs[doc_i][reverse_voc[term_i]] = quantized[doc_i, term_i]
+            enhanced_docs[doc_i][reverse_voc[term_i]] = quantized[
+                doc_i, term_i
+            ].item()
             if doc_i != prev_i:
                 pbar.update(doc_i - prev_i)
                 prev_i = doc_i
