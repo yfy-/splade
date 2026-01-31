@@ -398,6 +398,7 @@ def main():
                                 "vector": d,
                             }
                             print(json.dumps(jsonl_dict))
+                            docidx += 1
     return 0
 
 
