@@ -11,6 +11,7 @@ from pathlib import Path
 from psutil import virtual_memory
 from shutil import rmtree
 from typing import Tuple
+import json
 
 import numpy as np
 
@@ -150,6 +151,7 @@ def main():
     parser.add_argument("-d", "--doc-compose")
     parser.add_argument("-n", "--nearest-percent", type=float, default=1.0)
     parser.add_argument("-p", "--pruning-submass", type=float, default=1.0)
+    parser.add_argument("--jsonl", action="store_true")
     args = parser.parse_args()
     lora_model_dir = args.lora_model_dir
     if lora_model_dir is not None:
@@ -313,44 +315,74 @@ def main():
 
         # Quantize and then reconstruct textual documents.
         reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
-        logging.info("Quantizing..")
+        if not args.jsonl:
+            logging.info("Quantizing..")
 
-        composed_docs_max = 0.0
-        for composed_docs in composed_docs_loader.batch_iter(immut=True):
-            composed_docs_max = max(
-                torch.max(composed_docs).item(), composed_docs_max
-            )
-
-        docidx = 0
-        for composed_docs in composed_docs_loader.batch_iter(immut=True):
-            quantized = quantize_sparse_8bit(
-                composed_docs, glob_max=composed_docs_max
-            )
-            for q_split in quantized.split(10000):
-                quantized_batches = np.array_split(q_split, args.jobs)
-                recreate_text_partial = partial(
-                    recreate_text, reverse_voc=reverse_voc
+            composed_docs_max = 0.0
+            for composed_docs in composed_docs_loader.batch_iter(immut=True):
+                composed_docs_max = max(
+                    torch.max(composed_docs).item(), composed_docs_max
                 )
-                if args.jobs > 1:
-                    with torch.multiprocessing.get_context("spawn").Pool(
-                        args.jobs
-                    ) as pool:
-                        recreated = pool.map(
-                            recreate_text_partial, quantized_batches
-                        )
-                else:
-                    recreated = [
-                        recreate_text_partial(qb) for qb in quantized_batches
-                    ]
 
-                for qb in recreated:
-                    for d in qb:
-                        print(f"{docids[docidx]}\t", end="")
-                        for term, weight in d.items():
-                            for _ in range(weight):
-                                print(f"{term} ", end="")
-                        print("")
-                        docidx += 1
+            docidx = 0
+            for composed_docs in composed_docs_loader.batch_iter(immut=True):
+                quantized = quantize_sparse_8bit(
+                    composed_docs, glob_max=composed_docs_max
+                )
+                for q_split in quantized.split(10000):
+                    quantized_batches = np.array_split(q_split, args.jobs)
+                    recreate_text_partial = partial(
+                        recreate_text, reverse_voc=reverse_voc
+                    )
+                    if args.jobs > 1:
+                        with torch.multiprocessing.get_context("spawn").Pool(
+                            args.jobs
+                        ) as pool:
+                            recreated = pool.map(
+                                recreate_text_partial, quantized_batches
+                            )
+                    else:
+                        recreated = [
+                            recreate_text_partial(qb)
+                            for qb in quantized_batches
+                        ]
+
+                    for qb in recreated:
+                        for d in qb:
+                            print(f"{docids[docidx]}\t", end="")
+                            for term, weight in d.items():
+                                for _ in range(weight):
+                                    print(f"{term} ", end="")
+                            print("")
+                            docidx += 1
+        else:
+            docidx = 0
+            for composed_docs in composed_docs_loader.batch_iter(immut=True):
+                for q_split in composed_docs.split(10000):
+                    split_batches = np.array_split(q_split, args.jobs)
+                    recreate_text_partial = partial(
+                        recreate_text, reverse_voc=reverse_voc
+                    )
+                    if args.jobs > 1:
+                        with torch.multiprocessing.get_context("spawn").Pool(
+                            args.jobs
+                        ) as pool:
+                            recreated = pool.map(
+                                recreate_text_partial, split_batches
+                            )
+                    else:
+                        recreated = [
+                            recreate_text_partial(qb) for qb in split_batches
+                        ]
+
+                    for qb in recreated:
+                        for d in qb:
+                            jsonl_dict = {
+                                "id": docids[docidx],
+                                "content": collection[docids[docidx]],
+                                "vector": d,
+                            }
+                            print(json.dumps(jsonl_dict))
     return 0
 
 
