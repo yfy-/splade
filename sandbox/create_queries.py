@@ -59,13 +59,14 @@ def main():
         sparse_queries = splade_encode(batch, splade, tokenizer, is_query=True)
         reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
         if args.jsonl:
-            for sq in sparse_queries:
+            enhanced_queries = recreate_text(sparse_queries, reverse_voc)
+            for eq in enhanced_queries:
                 print(
                     json.dumps(
                         {
                             "id": qids[query_idx],
                             "content": queries[query_idx],
-                            "vector": sq,
+                            "vector": eq,
                         }
                     )
                 )
