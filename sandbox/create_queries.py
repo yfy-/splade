@@ -57,23 +57,22 @@ def main():
     query_idx = 0
     for batch in batches:
         sparse_queries = splade_encode(batch, splade, tokenizer, is_query=True)
-        # For query quantization we do not need to keep a global scale
-        quantized = quantize_local_sparse_8bit(sparse_queries)
         reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
-        enhanced_queries = recreate_text(quantized, reverse_voc)
         if args.jsonl:
-            for eq in enhanced_queries:
+            for sq in sparse_queries:
                 print(
                     json.dumps(
                         {
                             "id": qids[query_idx],
                             "content": queries[query_idx],
-                            "vector": eq,
+                            "vector": sq,
                         }
                     )
                 )
                 query_idx += 1
         else:
+            quantized = quantize_local_sparse_8bit(sparse_queries)
+            enhanced_queries = recreate_text(quantized, reverse_voc)
             for eq in enhanced_queries:
                 print(f"{qids[query_idx]}: ", end="")
                 for q_term, term_w in eq.items():
