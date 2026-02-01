@@ -7,6 +7,7 @@ from typing import Tuple, List
 from sys import stdin
 import logging
 from pathlib import Path
+import json
 
 from splade_utils import (
     splade_encode,
@@ -36,6 +37,7 @@ def main():
     logging.basicConfig(level=logging.DEBUG)
     parser.add_argument("-b", "--batch-size", type=int, default=100000)
     parser.add_argument("-l", "--lora-model-dir")
+    parser.add_argument("-j", "--jsonl", action="store_true")
     args = parser.parse_args()
     qids, queries = load_queries(args.queries)
     queries = np.array(queries, dtype="object")
@@ -59,14 +61,27 @@ def main():
         quantized = quantize_local_sparse_8bit(sparse_queries)
         reverse_voc = {v: k for k, v in tokenizer.vocab.items()}
         enhanced_queries = recreate_text(quantized, reverse_voc)
-        for eq in enhanced_queries:
-            print(f"{qids[query_idx]}: ", end="")
-            for q_term, term_w in eq.items():
-                for _ in range(term_w):
-                    print(f"{q_term} ", end="")
+        if args.jsonl:
+            for eq in enhanced_queries:
+                print(
+                    json.dumps(
+                        {
+                            "id": qids[query_idx],
+                            "content": queries[query_idx],
+                            "vector": eq,
+                        }
+                    )
+                )
+                query_idx += 1
+        else:
+            for eq in enhanced_queries:
+                print(f"{qids[query_idx]}: ", end="")
+                for q_term, term_w in eq.items():
+                    for _ in range(term_w):
+                        print(f"{q_term} ", end="")
 
-            print("")
-            query_idx += 1
+                print("")
+                query_idx += 1
 
     return 0
 
