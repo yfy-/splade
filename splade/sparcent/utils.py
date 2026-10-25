@@ -9,8 +9,6 @@ import numpy as np
 from functools import partial
 import logging
 from pathlib import Path
-from peft.mapping import get_peft_model
-from peft.tuners.lora.config import LoraConfig
 
 
 def load_collection(collection_path: str) -> Dict[int, str]:
@@ -32,6 +30,10 @@ def load_tokenizer_and_model(
     tok_model_name = model_name_or_dir
     splade = Splade(model_name_or_dir)
     if lora_model_dir is not None:
+        # peft is only needed for LoRA tuned models.
+        from peft.mapping import get_peft_model
+        from peft.tuners.lora.config import LoraConfig
+
         tok_model_name = lora_model_dir
         peft_config = LoraConfig(target_modules=["q_lin", "k_lin"])
         splade = get_peft_model(splade, peft_config)
@@ -47,8 +49,12 @@ def splade_encode(
     tokenizer: AutoTokenizer,
     batch_size=16,
     is_query=False,
+    device: Optional[str] = None,
 ) -> torch.Tensor:
     n = len(texts)
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     splade_kwargs = "d_kwargs"
     splade_out = "d_rep"
     if is_query:
@@ -70,9 +76,7 @@ def splade_encode(
                         padding=True,
                         truncation=True,
                     )
-                    if torch.cuda.is_available():
-                        tokens = tokens.to("cuda")
-
+                    tokens = tokens.to(device)
                     text_rep = splade(**{splade_kwargs: tokens})[
                         splade_out
                     ].cpu()

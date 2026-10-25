@@ -4,7 +4,7 @@ import argparse
 import torch
 from splade.models.transformer_rep import Splade
 from transformers import AutoTokenizer
-from splade_utils import splade_enhance, load_collection
+from splade.sparcent.utils import splade_enhance, load_collection
 import logging
 
 MODEL_NAME = "naver/splade_v2_max"

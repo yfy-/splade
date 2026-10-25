@@ -6,7 +6,7 @@ from typing import Dict
 
 import torch
 
-from splade_utils import load_collection
+from splade.sparcent.utils import load_collection
 
 
 def main():
